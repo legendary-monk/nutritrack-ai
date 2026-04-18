@@ -1,0 +1,1135 @@
+{
+  "name": "NutriTrack Telegram AI (Free Tier)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "Telegram Trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1780,
+        260
+      ],
+      "notesInFlow": true,
+      "notes": "Receives Telegram message events (text and photo)."
+    },
+    {
+      "parameters": {
+        "functionCode": "const cfg = {\n  DAILY_NUTRITION_DB: 'cba657af6abd4f69aaa686600d1d07ca',\n  WATER_WEIGHT_DB: '08477683fef9447ab097442555eeb5c8',\n  SUPPLEMENTS_DB: 'e45861dcf58d46fdbcd73cd0e0331116',\n  MEAL_TEMPLATE_DB: '405e29aa369845888350322321f24aa5',\n  NOTION_VERSION: '2022-06-28',\n  TZ: 'Asia/Kolkata'\n};\n\nreturn items.map(item => {\n  item.json.config = cfg;\n  return item;\n});"
+      },
+      "id": "Config",
+      "name": "Config",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        -1560,
+        260
+      ],
+      "notesInFlow": true,
+      "notes": "Central constants node so DB IDs are editable in one place."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ ($json.message?.text || '').toLowerCase() }}",
+              "operation": "regex",
+              "value2": "(water|weight)"
+            }
+          ]
+        }
+      },
+      "id": "IF WaterWeight",
+      "name": "IF WaterWeight",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1340,
+        120
+      ],
+      "notesInFlow": true,
+      "notes": "Branch A: routes water/weight text to WATER_WEIGHT flow."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ ($json.message?.text || '').toLowerCase() }}",
+              "operation": "contains",
+              "value2": "supplement"
+            }
+          ]
+        }
+      },
+      "id": "IF Supplement",
+      "name": "IF Supplement",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        340
+      ],
+      "notesInFlow": true,
+      "notes": "Branch B: routes supplement messages to SUPPLEMENTS flow. False branch is MEAL flow."
+    },
+    {
+      "parameters": {
+        "functionCode": "const msg = $json.message || {};\nconst photos = msg.photo || [];\nconst bestPhoto = photos.length ? photos[photos.length - 1] : null;\nreturn [{\n  json: {\n    ...$json,\n    chat_id: msg.chat?.id,\n    message_id: msg.message_id,\n    message_text: msg.text || '',\n    hasPhoto: !!bestPhoto,\n    telegram_file_id: bestPhoto?.file_id || null\n  }\n}];"
+      },
+      "id": "Prep Meal Input",
+      "name": "Prep Meal Input",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        560
+      ],
+      "notesInFlow": true,
+      "notes": "Normalizes Telegram payload and extracts largest photo file_id when available."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.hasPhoto }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "IF Has Photo",
+      "name": "IF Has Photo",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        560
+      ],
+      "notesInFlow": true,
+      "notes": "If true, run image pipeline through Telegram getFile + Gemini Vision."
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot{{$env.TELEGRAM_BOT_TOKEN}}/getFile",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "file_id",
+              "value": "={{$json.telegram_file_id}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "responseFormat": "json"
+          },
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Telegram Get File",
+      "name": "Telegram Get File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        460
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Fetches Telegram file_path from file_id for image download."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.error }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "IF Error TG GetFile",
+      "name": "IF Error TG GetFile",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        460
+      ],
+      "notesInFlow": true,
+      "notes": "Routes API errors to Telegram error reply."
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/file/bot{{$env.TELEGRAM_BOT_TOKEN}}/{{$json.result.file_path}}",
+        "options": {
+          "response": {
+            "responseFormat": "file"
+          },
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Download Photo",
+      "name": "Download Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -40,
+        560
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Downloads photo binary from Telegram file endpoint."
+    },
+    {
+      "parameters": {
+        "functionCode": "const b = item.binary?.data;\nif (!b) {\n  return [{ json: { ...$json, error: { message: 'No image binary found after download' } } }];\n}\nreturn [{\n  json: {\n    ...$json,\n    image_b64: b.data,\n    image_mime: b.mimeType || 'image/jpeg'\n  }\n}];"
+      },
+      "id": "Image to Base64",
+      "name": "Image to Base64",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        180,
+        560
+      ],
+      "notesInFlow": true,
+      "notes": "Converts binary image into base64 payload for Gemini Vision inline_data."
+    },
+    {
+      "parameters": {
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{$env.GEMINI_KEY}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"system_instruction\": {\n    \"parts\": [{\n      \"text\": \"You are an Indian nutritionist. Describe this meal for tracking with exact portions in natural language for Nutritionix. Use Indian units like katori, medium chapati, handful, bowl, glass. Format strictly like: 2 medium chapatis with ghee, 1.5 katori dal tadka, 100g white rice, 150g curd. Estimate portions from image. No extra text.\"\n    }]\n  },\n  \"contents\": [{\n    \"parts\": [\n      {\n        \"text\": \"Extract meal items with estimated portions for calorie tracking.\"\n      },\n      {\n        \"inline_data\": {\n          \"mime_type\": \"{{$json.image_mime}}\",\n          \"data\": \"{{$json.image_b64}}\"\n        }\n      }\n    ]\n  }]\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1200
+        }
+      },
+      "id": "Gemini Vision",
+      "name": "Gemini Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        560
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Uses Gemini 1.5 Flash to translate photo into Nutritionix-ready Indian meal description."
+    },
+    {
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "food_query",
+              "value": "={{$json.message_text}}"
+            }
+          ]
+        }
+      },
+      "id": "Use Text as Query",
+      "name": "Use Text as Query",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -420,
+        700
+      ],
+      "notesInFlow": true,
+      "notes": "Text-only meals bypass vision and go directly to Nutritionix query."
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition"
+      },
+      "id": "Merge Meal Query",
+      "name": "Merge Meal Query",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        660,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Joins image/text branches into a single MEAL pipeline."
+    },
+    {
+      "parameters": {
+        "functionCode": "const candidate = $json.candidates?.[0]?.content?.parts?.[0]?.text?.trim();\nconst fallback = $json.food_query || $json.message_text || '';\nreturn [{ json: { ...$json, food_query: candidate || fallback } }];"
+      },
+      "id": "Finalize Food Query",
+      "name": "Finalize Food Query",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        880,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Produces canonical food_query from Gemini output or user text fallback."
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "id": "Wait 1s",
+      "name": "Wait 1s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1080,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Rate-limit friendly pause before Nutritionix call."
+    },
+    {
+      "parameters": {
+        "url": "https://trackapi.nutritionix.com/v2/natural/nutrients",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query\": \"{{$json.food_query}}\",\n  \"timezone\": \"Asia/Kolkata\"\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Nutritionix",
+      "name": "Nutritionix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        620
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Calculates nutrition for parsed meal using Nutritionix natural language endpoint.",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "nutritionix-header-auth",
+          "name": "Nutritionix Headers"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "if ($json.error) return [{ json: $json }];\nconst foods = $json.foods || [];\nconst totals = foods.reduce((acc, f) => {\n  acc.cal += Number(f.nf_calories || 0);\n  acc.protein += Number(f.nf_protein || 0);\n  acc.carbs += Number(f.nf_total_carbohydrate || 0);\n  acc.fat += Number(f.nf_total_fat || 0);\n  acc.fiber += Number(f.nf_dietary_fiber || 0);\n  return acc;\n}, { cal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });\n\nreturn [{\n  json: {\n    ...$json,\n    cal: Math.round(totals.cal),\n    protein: Number(totals.protein.toFixed(1)),\n    carbs: Number(totals.carbs.toFixed(1)),\n    fat: Number(totals.fat.toFixed(1)),\n    fiber: Number(totals.fiber.toFixed(1))\n  }\n}];"
+      },
+      "id": "Sum Nutrition",
+      "name": "Sum Nutrition",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Sums Nutritionix foods[] into meal-level macro totals."
+    },
+    {
+      "parameters": {
+        "url": "=https://api.notion.com/v1/databases/{{$env.WORKOUT_DB_ID}}/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.NOTION_TOKEN}}"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filter\": {\n    \"property\": \"Date\",\n    \"date\": {\n      \"equals\": \"{{$now.setZone('Asia/Kolkata').toISODate()}}\"\n    }\n  },\n  \"page_size\": 1\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Notion Workout Query",
+      "name": "Notion Workout Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1720,
+        540
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Fetches today's workout context from WORKOUT_DB_ID.",
+      "credentials": {
+        "notionApi": {
+          "id": "notion-main",
+          "name": "Notion Integration"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.notion.com/v1/databases/{{$json.config.DAILY_NUTRITION_DB}}/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.NOTION_TOKEN}}"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filter\": {\n    \"property\": \"Date\",\n    \"date\": {\n      \"equals\": \"{{$now.setZone('Asia/Kolkata').toISODate()}}\"\n    }\n  },\n  \"page_size\": 100\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Notion Daily Totals Query",
+      "name": "Notion Daily Totals Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1720,
+        700
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Gets today's existing meal logs to compute running totals.",
+      "credentials": {
+        "notionApi": {
+          "id": "notion-main",
+          "name": "Notion Integration"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition"
+      },
+      "id": "Merge Context",
+      "name": "Merge Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1940,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Combines workout query + daily totals with meal macros for advice generation."
+    },
+    {
+      "parameters": {
+        "functionCode": "const workoutResults = $json.results || [];\nconst workout = workoutResults[0]?.properties?.Workout?.rich_text?.[0]?.plain_text || 'Not logged';\n\nconst mealResults = $json.results || [];\nlet tCal=0,tP=0,tC=0,tF=0;\nfor (const r of mealResults) {\n  const p = r.properties || {};\n  tCal += Number(p.Calories?.number || 0);\n  tP += Number(p.Protein?.number || 0);\n  tC += Number(p.Carbs?.number || 0);\n  tF += Number(p.Fat?.number || 0);\n}\n\nconst prompt = `You are my coach. User is in Hubli, India. Goal: ${$env.GOAL}. Today's workout: ${workout}. Current meal: ${$json.food_query} = ${$json.cal}kcal P${$json.protein}g C${$json.carbs}g F${$json.fat}g. Daily totals so far: ${Math.round(tCal)} kcal, P${tP.toFixed(1)}g C${tC.toFixed(1)}g F${tF.toFixed(1)}g. Give 2-sentence actionable advice in English, focus on protein target and timing.`;\n\nreturn [{ json: { ...$json, workout, dailyTotals: { cal: tCal, protein: tP, carbs: tC, fat: tF }, advice_prompt: prompt } }];"
+      },
+      "id": "Build Advice Prompt",
+      "name": "Build Advice Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Builds deterministic coach prompt including workout + meal + daily totals."
+    },
+    {
+      "parameters": {
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{$env.GEMINI_KEY}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"system_instruction\": {\n    \"parts\": [{\"text\": \"You are a concise nutrition and training coach. Return exactly 2 sentences.\"}]\n  },\n  \"contents\": [{\n    \"parts\": [{\"text\": \"{{$json.advice_prompt}}\"}]\n  }]\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1200
+        }
+      },
+      "id": "Gemini Advice",
+      "name": "Gemini Advice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2380,
+        620
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Generates personalized, short actionable advice.",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gemini-header-auth",
+          "name": "Gemini Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const advice = $json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Keep protein high in your next meal and stay hydrated.';\nconst hour = Number($now.setZone('Asia/Kolkata').toFormat('H'));\nconst mealType = hour < 11 ? 'Breakfast' : hour < 16 ? 'Lunch' : 'Dinner';\nreturn [{ json: { ...$json, advice, mealType } }];"
+      },
+      "id": "Prepare Notion Payload",
+      "name": "Prepare Notion Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Extracts advice text and computes meal type by India local hour."
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.NOTION_TOKEN}}"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"parent\": {\"database_id\": \"{{$json.config.DAILY_NUTRITION_DB}}\"},\n  \"properties\": {\n    \"Name\": {\"title\": [{\"text\": {\"content\": \"{{$json.food_query.substring(0,80)}}\"}}]},\n    \"Date\": {\"date\": {\"start\": \"{{$now.setZone('Asia/Kolkata').toISODate()}}\"}},\n    \"Meal Type\": {\"select\": {\"name\": \"{{$json.mealType}}\"}},\n    \"Calories\": {\"number\": {{$json.cal}}},\n    \"Protein\": {\"number\": {{$json.protein}}},\n    \"Carbs\": {\"number\": {{$json.carbs}}},\n    \"Fat\": {\"number\": {{$json.fat}}},\n    \"Fiber\": {\"number\": {{$json.fiber}}},\n    \"Photo URL\": {\"url\": \"{{$json.telegram_file_id || ''}}\"},\n    \"Advice\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.advice}}\"}}]},\n    \"Source\": {\"select\": {\"name\": \"Telegram\"}}\n  }\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Write Daily Nutrition",
+      "name": "Write Daily Nutrition",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2820,
+        620
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Writes final meal log to Notion DAILY_NUTRITION database.",
+      "credentials": {
+        "notionApi": {
+          "id": "notion-main",
+          "name": "Notion Integration"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$json.chat_id || $json.message?.chat?.id}}",
+        "text": "=✅ {{$json.mealType}} logged: {{$json.cal}} kcal | P{{$json.protein}} C{{$json.carbs}} F{{$json.fat}}\n{{$json.advice}}",
+        "additionalFields": {}
+      },
+      "id": "Reply Meal Logged",
+      "name": "Reply Meal Logged",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3040,
+        620
+      ],
+      "notesInFlow": true,
+      "notes": "Sends confirmation to Telegram with macro summary + advice.",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const txt = ($json.message?.text || '').trim();\nconst m = txt.match(/(\\d+\\.?\\d*)\\s*(l|kg)/ig) || [];\nlet water = null, weight = null;\nfor (const part of m) {\n  const mm = part.match(/(\\d+\\.?\\d*)\\s*(l|kg)/i);\n  if (!mm) continue;\n  const val = Number(mm[1]);\n  const unit = mm[2].toLowerCase();\n  if (unit === 'l') water = val;\n  if (unit === 'kg') weight = val;\n}\nreturn [{ json: { ...$json, chat_id: $json.message?.chat?.id, water_l: water, weight_kg: weight } }];"
+      },
+      "id": "Parse WaterWeight",
+      "name": "Parse WaterWeight",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        40
+      ],
+      "notesInFlow": true,
+      "notes": "Parses water/weight values with regex /(\\d+\\.?\\d*)\\s*(l|kg)/i."
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.NOTION_TOKEN}}"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"parent\": {\"database_id\": \"{{$json.config.WATER_WEIGHT_DB}}\"},\n  \"properties\": {\n    \"Name\": {\"title\": [{\"text\": {\"content\": \"Water/Weight {{$now.setZone('Asia/Kolkata').toISODate()}}\"}}]},\n    \"Date\": {\"date\": {\"start\": \"{{$now.setZone('Asia/Kolkata').toISODate()}}\"}},\n    \"Water_L\": {\"number\": {{$json.water_l || 0}}},\n    \"Weight_kg\": {\"number\": {{$json.weight_kg || 0}}}\n  }\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Write WaterWeight",
+      "name": "Write WaterWeight",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -900,
+        40
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Writes parsed hydration and bodyweight to WATER_WEIGHT Notion DB."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$json.chat_id}}",
+        "text": "=✅ Logged water/weight: {{$json.water_l || '-'}} L, {{$json.weight_kg || '-'}} kg",
+        "additionalFields": {}
+      },
+      "id": "Reply WaterWeight",
+      "name": "Reply WaterWeight",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -680,
+        40
+      ],
+      "notesInFlow": true,
+      "notes": "Acknowledges water/weight logging in Telegram.",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const txt = ($json.message?.text || '').trim();\nconst cleaned = txt.replace(/supplement\\s*:?/i, '').trim();\nconst mm = cleaned.match(/^(.*?)(?:\\s+(\\d+(?:\\.?\\d+)?\\s*(?:mg|g|ml|caps?|tabs?|scoops?)))?$/i);\nreturn [{\n  json: {\n    ...$json,\n    chat_id: $json.message?.chat?.id,\n    supplement_name: (mm?.[1] || cleaned || 'Supplement').trim(),\n    dose: (mm?.[2] || 'unspecified').trim()\n  }\n}];"
+      },
+      "id": "Parse Supplement",
+      "name": "Parse Supplement",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        340
+      ],
+      "notesInFlow": true,
+      "notes": "Extracts supplement name and dose from message text."
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.NOTION_TOKEN}}"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"parent\": {\"database_id\": \"{{$json.config.SUPPLEMENTS_DB}}\"},\n  \"properties\": {\n    \"Name\": {\"title\": [{\"text\": {\"content\": \"{{$json.supplement_name.substring(0,80)}}\"}}]},\n    \"Date\": {\"date\": {\"start\": \"{{$now.setZone('Asia/Kolkata').toISODate()}}\"}},\n    \"Dose\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.dose}}\"}}]},\n    \"Source\": {\"select\": {\"name\": \"Telegram\"}}\n  }\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "Write Supplement",
+      "name": "Write Supplement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -680,
+        340
+      ],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Writes supplement log to SUPPLEMENTS database in Notion."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$json.chat_id}}",
+        "text": "=✅ Supplement logged: {{$json.supplement_name}} ({{$json.dose}})",
+        "additionalFields": {}
+      },
+      "id": "Reply Supplement",
+      "name": "Reply Supplement",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        340
+      ],
+      "notesInFlow": true,
+      "notes": "Acknowledges supplement logging.",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$json.chat_id || $json.message?.chat?.id}}",
+        "text": "=⚠️ Error: {{$json.error?.message || 'Unknown API error'}}. Try again.",
+        "additionalFields": {}
+      },
+      "id": "Reply Error",
+      "name": "Reply Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Global error responder for failed HTTP steps.",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "IF WaterWeight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF WaterWeight": {
+      "main": [
+        [
+          {
+            "node": "Parse WaterWeight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Supplement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse WaterWeight": {
+      "main": [
+        [
+          {
+            "node": "Write WaterWeight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write WaterWeight": {
+      "main": [
+        [
+          {
+            "node": "Reply WaterWeight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Supplement": {
+      "main": [
+        [
+          {
+            "node": "Parse Supplement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prep Meal Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Supplement": {
+      "main": [
+        [
+          {
+            "node": "Write Supplement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Supplement": {
+      "main": [
+        [
+          {
+            "node": "Reply Supplement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Meal Input": {
+      "main": [
+        [
+          {
+            "node": "IF Has Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Photo": {
+      "main": [
+        [
+          {
+            "node": "Telegram Get File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Use Text as Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Get File": {
+      "main": [
+        [
+          {
+            "node": "IF Error TG GetFile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Error TG GetFile": {
+      "main": [
+        [
+          {
+            "node": "Reply Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Photo": {
+      "main": [
+        [
+          {
+            "node": "Image to Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image to Base64": {
+      "main": [
+        [
+          {
+            "node": "Gemini Vision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Vision": {
+      "main": [
+        [
+          {
+            "node": "Merge Meal Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Text as Query": {
+      "main": [
+        [
+          {
+            "node": "Merge Meal Query",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Meal Query": {
+      "main": [
+        [
+          {
+            "node": "Finalize Food Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Food Query": {
+      "main": [
+        [
+          {
+            "node": "Wait 1s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1s": {
+      "main": [
+        [
+          {
+            "node": "Nutritionix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nutritionix": {
+      "main": [
+        [
+          {
+            "node": "Sum Nutrition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sum Nutrition": {
+      "main": [
+        [
+          {
+            "node": "Notion Workout Query",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notion Daily Totals Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion Workout Query": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion Daily Totals Query": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Context": {
+      "main": [
+        [
+          {
+            "node": "Build Advice Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Advice Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Advice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Advice": {
+      "main": [
+        [
+          {
+            "node": "Prepare Notion Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notion Payload": {
+      "main": [
+        [
+          {
+            "node": "Write Daily Nutrition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Daily Nutrition": {
+      "main": [
+        [
+          {
+            "node": "Reply Meal Logged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
